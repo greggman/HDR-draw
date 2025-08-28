@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+
+    <meta name="theme-color" content="#000000">
+    <meta name="mobile-web-app-capable" content="yes">
+
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <title>HDR draw</title>
+
+    <style>
+:root {
+  color-scheme: light dark;
+}
+html, body {
+  overscroll-behavior: none;
+  box-sizing: border-box;
+  margin: 0;
+  height: 100%;
+}
+*, *:before, *:after {
+  box-sizing: inherit;
+}
+canvas {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+#ui, #help {
+  position: absolute;
+  top: 0;
+  background-color: rgb(0 0 0 / 0.8);
+  padding: 5px;
+  margin: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+#ui {
+  right: 0;
+}
+#help {
+  left: 0;
+}
+#instructions {
+  text-align: center;
+  padding-bottom: 3px;
+  border-bottom: 1px solid gray;
+  margin-bottom: 3px;
+}
+#split {
+  display: flex;
+  align-items: center;
+}
+#controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+inupt, a {
+  user-select: initial;
+  pointer-events: initial;
+}
+label {
+  display: flex;
+  align-items: center;
+}
+.warn, .info {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  font-weight: bold;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+.warn {
+  pointer-events: none;
+}
+.warn>div {
+  background-color: red;
+  color: white;
+  padding: 1em;
+  max-width: 80%;
+}
+.info>div {
+  background-color: rgb(0 0 0 / 0.9);
+  color: white;
+  padding: 1em;
+  max-width: 80%;
+  text-align: left;
+}
+
+    </style>
+  </head>
+  <body>
+<canvas id="drawing"></canvas>
+<div id="ui">
+  <div id="instructions">use mouse/pad/finger to draw</div>
+  <div id="split">
+    <canvas id="brush" width="50" height="50"></canvas>
+    <div id="controls">
+      <label>r: <input type="range" min="0" max="10" id="r" value="2" step="0.01"></label>
+      <label>g: <input type="range" min="0" max="10" id="g" value="2" step="0.01"></label>
+      <label>b: <input type="range" min="0" max="10" id="b" value="2" step="0.01"></label>
+      <label>size: <input type="range" min="0" max="1" id="size" value="1" step="0.01"></label>
+      <label>hard: <input type="range" min="0" max="0.99" id="hard" value="0.5" step="0.01"></label>
+    </div>
+  </div>
+</div>
+<div id="help">
+  help / about
+</div>
+<div class="warn" id="no-hdr" style="display: none">
+  <div>The browser says your device or monitor doesn't support HDR.<br>
+  If you're on a laptop using an external monitor, try the built in monitor<br>
+  or, try this site on your phone. Most phones support HDR.</div>
+</div>
+<div class="warn" id="no-webgpu" style="display: none">
+  <div>Your browser doesn't appear to support WebGPU (yet)<br>
+  See instructions <a href="https://github.com/gpuweb/gpuweb/wiki/Implementation-Status" target="_blank">here</a>.
+  It's possible you can enable it.</div>
+</div>
+<div class="info" id="about" style="display: none">
+  <div>
+    <p>
+      If you have an HDR display this page lets you draw in HDR (colors brighter than #ffffff).
+      Different monitors, phones, have different maxiumum HDR "headroom" (the amount brighter than "normal").
+    </p>
+    <p>
+      This is a feature available to WebGPU and coming soon to Canvas 2D and WebGL.
+   </p>
+    <p>      
+      All Macs, iPhones, iPads, and most Android devices support HDR.
+      <ul>
+      <li>Safari in iOS 26, macOS Tahoe 26 "should" support this.
+      <li>For iOS 18 you can enable it in Settings→Safari→Advanced→Experimental
+      Features→WebGPU and WebGPU HDR.
+      <li>For macOS, Chrome and Safari Technology Preview support this
+      <li>Windows Chrome and Edge should support this.
+      </ul>
+    </p>
+
+</div>
+  </body>
+  <script type="module">
+import {
+  mat4,
+} from 'https://wgpu-matrix.org/dist/3.x/wgpu-matrix.module.js';
+
+async function main() {
+  const adapter = await navigator.gpu?.requestAdapter();
+  const device = await adapter?.requestDevice();
+  if (!device) {
+    document.querySelector('#no-webgpu').style.display = '';
+    return;
+  }
+
+  const hdrMediaQuery = window.matchMedia('(dynamic-range: high)');
+  function updateHDRWarning() {
+    document.querySelector('#no-hdr').style.display = hdrMediaQuery.matches ? 'none' : '';
+  }
+  hdrMediaQuery.addEventListener('change', updateHDRWarning);
+  updateHDRWarning();
+
+  device.addEventListener('uncapturederror', e => console.error(e.error.message));
+
+  const presentationFormat = 'rgba16float';
+
+  function setupCanvas(selector, alphaMode) {
+    const canvas = document.querySelector(selector);
+    const context = canvas.getContext('webgpu');
+
+    context.configure({
+      device,
+      alphaMode,
+      format: presentationFormat,
+      toneMapping: { mode: 'extended' },
+      usage: GPUTextureUsage.COPY_DST |
+            GPUTextureUsage.RENDER_ATTACHMENT |
+            GPUTextureUsage.TEXTURE_BINDING,
+    });
+
+    return [canvas, context];
+  }
+
+  const [drawingCanvas, drawingContext] = setupCanvas('#drawing', 'opaque');
+  const [, brushContext] = setupCanvas('#brush', 'premultiplied');
+
+  const module = device.createShaderModule({
+    code: `
+    struct Uniforms {
+      matrix: mat4x4f,
+      color: vec4f,
+      hardness: f32,
+      radius: f32,
+    };
+
+    struct VSOut {
+      @builtin(position) pos: vec4f,
+      @location(0) uv: vec2f,
+    };
+
+    @group(0) @binding(0) var<uniform> u: Uniforms;
+
+    @vertex fn vsDraw(@builtin(vertex_index) i: u32) -> VSOut {
+      let pos = array(
+        vec2f(0, 0),
+        vec2f(1, 0),
+        vec2f(0, 1),
+        vec2f(1, 1),
+      );
+      let p = pos[i];
+      return VSOut(
+        u.matrix * vec4f(p, 0, 1),
+        p,
+      );
+    }
+
+    @fragment fn fsDraw(v: VSOut) -> @location(0) vec4f {
+      let uv = v.uv * 2 - 1;
+      let a = smoothstep(u.radius, u.radius * u.hardness, length(uv));
+      let aa = a * u.color.a;
+      return vec4f(u.color.rgb * aa, aa);
+    }
+    `,
+  });
+
+  const drawPipeline = device.createRenderPipeline({
+    layout: 'auto',
+    vertex: { module },
+    fragment: {
+      module,
+      targets: [
+        {
+          format: presentationFormat,
+          blend: {
+            color: {
+              operation: 'add',
+              srcFactor: 'one',
+              dstFactor: 'one-minus-src-alpha'
+            },
+            alpha: {
+              operation: 'add',
+              srcFactor: 'one',
+              dstFactor: 'one-minus-src-alpha'
+            },
+          },
+        },
+      ],
+    },
+    primitive: {
+      topology: 'triangle-strip',
+    },
+  });
+
+  const uniformBuffer = device.createBuffer({
+    size: (16 + 4 + 1 + 1 + 2) * 4,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  const bindGroup = device.createBindGroup({
+    layout: drawPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: uniformBuffer } },
+    ],
+  });
+
+  const settings = {
+    color: [2, 2, 2, 0.5],
+    hardness: 0,
+    radius: 1.0,
+  };
+  const kBrushSizeForDrawing = 100;
+  const kBrushSizeForUI = 40;
+
+  const getTexture =(() => {
+    let texture;
+    return function getTexture() {
+      const canvasTexture = drawingContext.getCurrentTexture();
+      const { width, height } = canvasTexture;
+      if (texture?.width !== width || texture?.height !== height) {
+        const newTexture = device.createTexture({
+          format: presentationFormat,
+          size: [width, height],
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST,
+        });
+        clearTexture(newTexture, [1, 1, 1, 1]);
+        if (texture) {
+          copyTextureToTexture(texture, newTexture);
+          texture.destroy();
+        }
+        texture = newTexture;
+      }
+      return { texture, canvasTexture };
+    };
+  })();
+
+  function drawBrush(x, y, brushSize, texture) {
+    const { width, height } = texture;
+    const matrix = mat4.ortho(0, width, height, 0, 0, 1);
+    mat4.translate(matrix, [x * width, y * height, 0], matrix);
+    mat4.scale(matrix, [brushSize, brushSize, 1], matrix);
+    mat4.translate(matrix, [-0.5, -0.5, 0], matrix);
+
+    const uniforms = [
+      ...matrix,
+      ...settings.color,
+      settings.hardness,
+      settings.radius,
+    ];
+    device.queue.writeBuffer(uniformBuffer, 0, new Float32Array(uniforms))
+
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: texture.createView(),
+          loadOp: 'load',
+          storeOp: 'store',
+          clearValue: [1, 1, performance.now() % 1000 / 1000, 1],
+        },
+      ],
+    });
+    pass.setPipeline(drawPipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(4);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+  }
+
+  function draw(x, y) {
+    const { texture, canvasTexture } = getTexture();
+    drawBrush(x, y, kBrushSizeForDrawing, texture);
+    copyTextureToTexture(texture, canvasTexture);
+  }
+
+  function clearTexture(texture, color) {
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: texture.createView(),
+          loadOp: 'clear',
+          storeOp: 'store',
+          clearValue: color,
+        },
+      ],
+    });
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+  }
+
+  function copyTextureToTexture(src, dst) {
+    const copySize = [
+      Math.min(src.width, dst.width),
+      Math.min(src.height, dst.height),
+    ];
+    const encoder = device.createCommandEncoder();
+    encoder.copyTextureToTexture(
+      { texture: src },
+      { texture: dst },
+      copySize,
+    );
+    device.queue.submit([encoder.finish()]);
+  }
+
+  function updateBrush() {
+    const texture = brushContext.getCurrentTexture();
+    clearTexture(texture, [0, 0, 0, 0]);
+    drawBrush(0.5, 0.5, kBrushSizeForUI, texture);
+  }
+  updateBrush();
+
+  function addRange(selector, setter) {
+    document.querySelector(selector).addEventListener('input', e => {
+      setter(parseFloat(e.target.value));
+      updateBrush();
+    });
+  }
+  ['#r', '#g', '#b'].forEach((selector, i) => {
+    addRange(selector, v => settings.color[i] = v);
+  });
+  addRange('#size', v => settings.radius = v);
+  addRange('#hard', v => settings.hardness = v);
+
+  const aboutElem = document.querySelector('#about');
+  document.querySelector('#help').addEventListener('click', () => aboutElem.style.display = '');
+  aboutElem.addEventListener('click', () => aboutElem.style.display = 'none');
+
+  function onMove(e) {
+    e.preventDefault();
+    const x = e.clientX / drawingCanvas.clientWidth;
+    const y = e.clientY / drawingCanvas.clientHeight;
+    draw(x, y);
+  }
+
+  function onUp(e) {
+    e.preventDefault();
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointermove', onMove);
+  }
+
+  function onDown(e) {
+    onMove(e);
+    window.addEventListener('pointerup', onUp, { passive: false });
+    window.addEventListener('pointermove', onMove, { passive: false });
+  }
+
+  drawingCanvas.addEventListener('pointerdown', onDown, { passive: false });
+
+  const observer = new ResizeObserver(entries => {
+    for (const entry of entries) {
+      const width = entry.contentBoxSize[0].inlineSize;
+      const height = entry.contentBoxSize[0].blockSize;
+      const canvas = entry.target;
+      canvas.width = Math.max(1, Math.min(width, device.limits.maxTextureDimension2D));
+      canvas.height = Math.max(1, Math.min(height, device.limits.maxTextureDimension2D));
+    }
+    const { canvasTexture, texture } = getTexture();
+    copyTextureToTexture(texture, canvasTexture);
+  })
+  observer.observe(drawingCanvas);
+}
+
+main();
+  </script>
+</html>
