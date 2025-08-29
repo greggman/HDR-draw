@@ -81,21 +81,23 @@ label {
   justify-content: center;
   align-items: center;
   text-align: center;
+
+  > div {
+    max-width: 80%;
+    max-height: 80%;
+    overflow-y: auto;
+    color: white;
+    padding: 1em;
+  }
 }
 .warn {
   pointer-events: none;
 }
 .warn>div {
   background-color: red;
-  color: white;
-  padding: 1em;
-  max-width: 80%;
 }
 .info>div {
   background-color: rgb(0 0 0 / 0.9);
-  color: white;
-  padding: 1em;
-  max-width: 80%;
   text-align: left;
 }
 
@@ -133,7 +135,7 @@ label {
   <div>
     <p>
       If you have an HDR display this page lets you draw in HDR (colors brighter than #ffffff).
-      Different monitors, phones, have different maxiumum HDR "headroom" (the amount brighter than "normal").
+      Different monitors, phones, have different maximum HDR "headroom" (the amount brighter than "normal").
     </p>
     <p>
       This is a feature available to WebGPU and coming soon to Canvas 2D and WebGL.
@@ -141,13 +143,14 @@ label {
     <p>      
       All Macs, iPhones, iPads, and most Android devices support HDR.
       <ul>
-      <li>Safari in iOS 26, macOS Tahoe 26 "should" support this.
+      <li>Safari in iOS 26, macOS Tahoe 26 "should" support this. (untested)
       <li>For iOS 18 you can enable it in Settings→Safari→Advanced→Experimental
       Features→WebGPU and WebGPU HDR.
-      <li>For macOS, Chrome and Safari Technology Preview support this
-      <li>Windows Chrome and Edge should support this.
+      <li>For macOS, Chrome works, Safari Technology Preview does not.
+      <li>Windows Chrome and Edge should support this (untested)
       </ul>
     </p>
+    <p><a href="https://github.com/greggman/HDR-draw" target="_blank">github</a></p>
 
 </div>
   </body>
