@@ -126,6 +126,9 @@ label {
   If you're on a laptop using an external monitor, try the built in monitor<br>
   or, try this site on your phone. Most phones support HDR.</div>
 </div>
+<div class="warn" id="no-hdr-canvas" style="display: none">
+  <div>This browser does not support HDR canvas.</div>
+</div>
 <div class="warn" id="no-webgpu" style="display: none">
   <div>Your browser doesn't appear to support WebGPU (yet)<br>
   See instructions <a href="https://github.com/gpuweb/gpuweb/wiki/Implementation-Status" target="_blank">here</a>.
@@ -167,19 +170,17 @@ async function main() {
     return;
   }
 
-  const hdrMediaQuery = window.matchMedia('(dynamic-range: high)');
-  function updateHDRWarning() {
-    document.querySelector('#no-hdr').style.display = hdrMediaQuery.matches ? 'none' : '';
-  }
-  hdrMediaQuery.addEventListener('change', updateHDRWarning);
-  updateHDRWarning();
-
   device.addEventListener('uncapturederror', e => console.error(e.error.message));
 
   const presentationFormat = 'rgba16float';
 
+  /**
+   * @returns {[HTMLCanvasElement, GPUCanvasContext]}
+   */
   function setupCanvas(selector, alphaMode) {
+    /** @type {HTMLCanvasElement} */
     const canvas = document.querySelector(selector);
+    /** @type {GPUCanvasContext} */
     const context = canvas.getContext('webgpu');
 
     context.configure({
@@ -197,6 +198,17 @@ async function main() {
 
   const [drawingCanvas, drawingContext] = setupCanvas('#drawing', 'opaque');
   const [, brushContext] = setupCanvas('#brush', 'premultiplied');
+
+  const hdrMediaQuery = window.matchMedia('(dynamic-range: high)');
+  function updateHDRWarning() {
+    const displayIsHDR = hdrMediaQuery.matches;
+    document.querySelector('#no-hdr').style.display = displayIsHDR ? 'none' : '';
+
+    const browserDisplaysCanvasAsHDR = drawingContext.getConfiguration().toneMapping?.mode === 'extended';
+    document.querySelector('#no-hdr-canvas').style.display = displayIsHDR && !browserDisplaysCanvasAsHDR ? '' : 'none';
+  }
+  hdrMediaQuery.addEventListener('change', updateHDRWarning);
+  updateHDRWarning();
 
   const module = device.createShaderModule({
     code: `
